@@ -1,0 +1,123 @@
+name: build-visual-linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # Ubuntu 24.04 ships Qt 6.4 (good) but its MLT is older than Shotcut's
+      # required >=7.36. We compile MLT from source (~3 min) and cache the
+      # result so subsequent runs skip rebuilding.
+      - name: Install build tools and Qt6
+        run: |
+          sudo apt update
+          sudo apt install -y --no-install-recommends \
+            cmake ninja-build pkg-config build-essential git ca-certificates \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-multimedia-dev qt6-charts-dev qt6-svg-dev \
+            qt6-declarative-dev qt6-tools-dev qt6-tools-dev-tools \
+            qt6-websockets-dev qt6-l10n-tools qt6-shader-baker \
+            libqt6opengl6-dev libqt6sql6-sqlite \
+            qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-window qml6-module-qtquick-layouts \
+            qml6-module-qtqml-workerscript qml6-module-qtqml-models \
+            qml6-module-qtcharts qml6-module-qtquick-dialogs \
+            libfftw3-dev libsdl2-dev libx11-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libavfilter-dev \
+            libavdevice-dev libswscale-dev libswresample-dev \
+            libsndfile1-dev libsamplerate0-dev librubberband-dev \
+            libvidstab-dev libebur128-dev libsox-dev libxml2-dev \
+            ruby ruby-dev rubygems-integration rpm xz-utils
+
+      - name: Cache MLT build
+        id: mlt-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/mlt
+          key: mlt-7.40.0-ubuntu-24.04-v1
+
+      - name: Build MLT from source
+        if: steps.mlt-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 -b v7.40.0 https://github.com/mltframework/mlt.git /tmp/mlt
+          cd /tmp/mlt
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/mlt \
+            -DMOD_QT6=OFF -DMOD_GLAXNIMATE_QT6=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+
+      - name: Install fpm (deb + pacman packager)
+        run: sudo gem install --no-document fpm
+
+      - name: Configure Visual
+        run: |
+          export PKG_CONFIG_PATH=/opt/mlt/lib/pkgconfig:/opt/mlt/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
+          export LD_LIBRARY_PATH=/opt/mlt/lib:/opt/mlt/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCLANG_FORMAT=OFF
+
+      - name: Build Visual
+        run: cmake --build build --parallel
+
+      - name: Install to staging dir
+        run: DESTDIR="${{ github.workspace }}/stage" cmake --install build
+
+      - name: Compute version
+        id: ver
+        run: echo "v=$(date +%y.%-m.%-d)" >> $GITHUB_OUTPUT
+
+      # Portable tarball: drop /usr prefix so users can extract into ~/Visual
+      # and run bin/Visual directly.
+      - name: Package .tar.xz (portable)
+        run: |
+          tar -C stage/usr -cJf Visual-linux-x86_64-${{ steps.ver.outputs.v }}.tar.xz .
+          ls -lh *.tar.xz
+
+      - name: Package .deb (Debian/Ubuntu)
+        run: |
+          fpm -s dir -t deb -n visual -v ${{ steps.ver.outputs.v }} \
+            --description "Visual - cross-platform video editor (Shotcut fork)" \
+            --license GPL-3.0 \
+            --url "https://github.com/${{ github.repository }}" \
+            --maintainer "YoStudios" \
+            --depends 'libqt6core6t64' --depends 'libqt6gui6t64' \
+            --depends 'libqt6widgets6t64' --depends 'libqt6quick6' \
+            --depends 'libfftw3-double3' --depends 'libsdl2-2.0-0' \
+            -C stage .
+          ls -lh *.deb
+
+      - name: Package .pkg.tar.zst (Arch / pacman -Syu)
+        run: |
+          fpm -s dir -t pacman -n visual -v ${{ steps.ver.outputs.v }} \
+            --description "Visual - cross-platform video editor (Shotcut fork)" \
+            --license GPL-3.0 \
+            --url "https://github.com/${{ github.repository }}" \
+            --maintainer "YoStudios" \
+            --depends 'qt6-base' --depends 'qt6-multimedia' \
+            --depends 'qt6-declarative' --depends 'qt6-charts' \
+            --depends 'qt6-websockets' --depends 'fftw' --depends 'sdl2' \
+            -C stage .
+          ls -lh *.pkg.tar.zst
+
+      - name: Upload all packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Visual-linux-packages
+          path: |
+            *.tar.xz
+            *.deb
+            *.pkg.tar.zst
+          if-no-files-found: error
