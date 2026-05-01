@@ -1,14 +1,12 @@
 name: build-visual-macos
-
 on:
   workflow_dispatch:
   push:
     branches: [main, master]
   pull_request:
-
 jobs:
   build:
-    runs-on: macos-14 # Apple Silicon (arm64). Swap to macos-13 for Intel.
+    runs-on: macos-14
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -17,9 +15,6 @@ jobs:
       - name: Install build dependencies (Homebrew)
         run: |
           brew update
-          # mlt brings libmlt + mlt++ (the C++ bindings Shotcut links against).
-          # qt@6 provides all required Qt6 modules. ffmpeg/fftw/frei0r/sdl2 are
-          # runtime deps that MLT loads at runtime for codecs and filters.
           brew install \
             cmake ninja pkg-config \
             qt@6 mlt ffmpeg fftw frei0r sdl2 \
@@ -37,15 +32,13 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Install (populate Visual.app bundle)
+      - name: Install
         run: cmake --install build
 
       - name: Bundle Qt frameworks + create DMG
         run: |
           QT_PREFIX="$(brew --prefix qt@6)"
           APP="dist/Visual.app"
-          # macdeployqt copies Qt frameworks, QML modules, and plugins into the
-          # .app so it's self-contained. -dmg wraps the result as Visual.dmg.
           "$QT_PREFIX/bin/macdeployqt" "$APP" -qmldir=src/qml -dmg
           ls -lh dist/
 
