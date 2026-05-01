@@ -50,30 +50,34 @@ jobs:
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=./install \
-            -DCLANG_FORMAT=OFF
+            -DCLANG_FORMAT=OFF \
+            -DCMAKE_PREFIX_PATH=/mingw64
 
       - name: Build
         shell: msys2 {0}
         run: cmake --build build --parallel
 
-      - name: Install
+      - name: Find exe
         shell: msys2 {0}
-        run: cmake --install build
+        run: find build -name "Visual.exe" 2>/dev/null || find build -name "*.exe" 2>/dev/null
 
       - name: Bundle dependencies
         shell: msys2 {0}
         run: |
           mkdir -p Visual
-          cp install/bin/Visual.exe Visual/
-          windeployqt6 --qmldir src/qml Visual/Visual.exe
-          # Copy MLT and other MinGW DLLs
+          EXE=$(find build -name "Visual.exe" | head -1)
+          echo "Found exe at: $EXE"
+          cp "$EXE" Visual/
+          cd Visual
+          /mingw64/qt6/bin/windeployqt6 --qmldir ../src/qml Visual.exe || \
+          /mingw64/bin/windeployqt6 --qmldir ../src/qml Visual.exe || true
           for dll in libmlt-7 libmlt++-7 libfftw3-3 libCuteLogger; do
-            find /mingw64/bin -name "${dll}.dll" -exec cp {} Visual/ \;
+            find /mingw64/bin -name "${dll}.dll" -exec cp {} . \; 2>/dev/null || true
           done
-          # Copy MinGW runtime
-          cp /mingw64/bin/libgcc_s_seh-1.dll Visual/
-          cp /mingw64/bin/libstdc++-6.dll Visual/
-          cp /mingw64/bin/libwinpthread-1.dll Visual/
+          cp /mingw64/bin/libgcc_s_seh-1.dll . 2>/dev/null || true
+          cp /mingw64/bin/libstdc++-6.dll . 2>/dev/null || true
+          cp /mingw64/bin/libwinpthread-1.dll . 2>/dev/null || true
+          cd ..
 
       - name: Package zip
         shell: msys2 {0}
