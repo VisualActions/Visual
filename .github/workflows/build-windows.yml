@@ -65,18 +65,69 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir -p Visual
+
           EXE=$(find build -name "Visual.exe" | head -1)
           echo "Found exe at: $EXE"
           cp "$EXE" Visual/
+
+          # Run windeployqt6 to collect Qt DLLs, plugins, and QML modules
           cd Visual
-          /mingw64/qt6/bin/windeployqt6 --qmldir ../src/qml Visual.exe || \
-          /mingw64/bin/windeployqt6 --qmldir ../src/qml Visual.exe || true
-          for dll in libmlt-7 libmlt++-7 libfftw3-3 libCuteLogger; do
-            find /mingw64/bin -name "${dll}.dll" -exec cp {} . \; 2>/dev/null || true
+          /mingw64/bin/windeployqt6 \
+            --qmldir ../src/qml \
+            --no-translations \
+            Visual.exe || true
+          cd ..
+
+          # Copy MLT runtime: libraries, plugins, and data
+          cp /mingw64/bin/libmlt-7.dll       Visual/ 2>/dev/null || true
+          cp /mingw64/bin/libmlt++-7.dll     Visual/ 2>/dev/null || true
+          mkdir -p Visual/lib/mlt
+          cp -r /mingw64/lib/mlt/*           Visual/lib/mlt/ 2>/dev/null || true
+          mkdir -p Visual/share/mlt
+          cp -r /mingw64/share/mlt/*         Visual/share/mlt/ 2>/dev/null || true
+
+          # Copy FFTW
+          cp /mingw64/bin/libfftw3-3.dll     Visual/ 2>/dev/null || true
+          cp /mingw64/bin/libfftw3f-3.dll    Visual/ 2>/dev/null || true
+
+          # Copy FFmpeg DLLs
+          for dll in avcodec avdevice avfilter avformat avutil postproc swresample swscale; do
+            find /mingw64/bin -name "${dll}*.dll" -exec cp {} Visual/ \; 2>/dev/null || true
           done
-          cp /mingw64/bin/libgcc_s_seh-1.dll . 2>/dev/null || true
-          cp /mingw64/bin/libstdc++-6.dll . 2>/dev/null || true
-          cp /mingw64/bin/libwinpthread-1.dll . 2>/dev/null || true
+
+          # Copy SDL2
+          cp /mingw64/bin/SDL2.dll           Visual/ 2>/dev/null || true
+
+          # Copy rubberband and vid.stab
+          cp /mingw64/bin/librubberband*.dll Visual/ 2>/dev/null || true
+          cp /mingw64/bin/libvidstab*.dll    Visual/ 2>/dev/null || true
+
+          # Copy libxml2
+          cp /mingw64/bin/libxml2*.dll       Visual/ 2>/dev/null || true
+
+          # Copy CuteLogger
+          find /mingw64/bin -name "libCuteLogger*.dll" -exec cp {} Visual/ \; 2>/dev/null || true
+
+          # GCC / MinGW runtime DLLs
+          cp /mingw64/bin/libgcc_s_seh-1.dll    Visual/ 2>/dev/null || true
+          cp /mingw64/bin/libstdc++-6.dll        Visual/ 2>/dev/null || true
+          cp /mingw64/bin/libwinpthread-1.dll    Visual/ 2>/dev/null || true
+
+          # Sweep all remaining transitive DLL dependencies using ldd
+          cd Visual
+          NEEDED=1
+          while [ "$NEEDED" -gt 0 ]; do
+            NEEDED=0
+            for exe_or_dll in *.exe *.dll; do
+              [ -f "$exe_or_dll" ] || continue
+              ldd "$exe_or_dll" 2>/dev/null | grep '/mingw64/' | awk '{print $3}' | while read dep; do
+                base=$(basename "$dep")
+                if [ ! -f "$base" ]; then
+                  cp "$dep" . 2>/dev/null && echo "Copied transitive dep: $base" && NEEDED=1 || true
+                fi
+              done
+            done
+          done
           cd ..
 
       - name: Package zip
